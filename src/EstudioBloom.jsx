@@ -1,4 +1,4 @@
-import React, { useState, useMemo, createContext, useContext } from 'react';
+import React, { useState, useEffect, useMemo, createContext, useContext } from 'react';
 import {
   Calendar, Clock, User, LogOut, Bell, Check, X, Plus,
   Phone, Mail, FileText, Home, List, ChevronLeft, ChevronRight,
@@ -187,13 +187,23 @@ function Toast({ toast }) {
 // APP (ROOT)
 // ═══════════════════════════════════════════════════════════════
 
+function loadLS(key, fallback) {
+  try {
+    const v = localStorage.getItem(key);
+    return v ? JSON.parse(v) : (typeof fallback === 'function' ? fallback() : fallback);
+  } catch { return typeof fallback === 'function' ? fallback() : fallback; }
+}
+
 export default function App() {
-  const [users, setUsers]               = useState(INIT_USERS);
-  const [appointments, setAppointments] = useState(buildAppointments);
+  const [users, setUsers]               = useState(() => loadLS('bloom_users', INIT_USERS));
+  const [appointments, setAppointments] = useState(() => loadLS('bloom_appts', buildAppointments));
   const [currentUser, setCurrentUser]   = useState(null);
   const [clientSec, setClientSec]       = useState('dashboard');
   const [adminSec, setAdminSec]         = useState('dashboard');
   const [toast, setToast]               = useState(null);
+
+  useEffect(() => { localStorage.setItem('bloom_users', JSON.stringify(users)); }, [users]);
+  useEffect(() => { localStorage.setItem('bloom_appts', JSON.stringify(appointments)); }, [appointments]);
 
   function showToast(message, type = 'success') {
     setToast({ message, type });

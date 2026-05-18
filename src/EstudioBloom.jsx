@@ -1,4 +1,10 @@
 import React, { useState, useEffect, useMemo, createContext, useContext } from 'react';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+  'https://qjfcbobawctqtthqgsca.supabase.co',
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFqZmNib2Jhd2N0cXR0aHFnc2NhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkxMzQyMjYsImV4cCI6MjA5NDcxMDIyNn0.3gfN4EW63ElmRUM3--VwJKIOTuewK21WgUQwbkzl2wE'
+);
 import {
   Calendar, Clock, User, LogOut, Bell, Check, X, Plus,
   Phone, Mail, FileText, Home, List, ChevronLeft, ChevronRight,
@@ -187,23 +193,40 @@ function Toast({ toast }) {
 // APP (ROOT)
 // ═══════════════════════════════════════════════════════════════
 
-function loadLS(key, fallback) {
-  try {
-    const v = localStorage.getItem(key);
-    return v ? JSON.parse(v) : (typeof fallback === 'function' ? fallback() : fallback);
-  } catch { return typeof fallback === 'function' ? fallback() : fallback; }
-}
-
 export default function App() {
-  const [users, setUsers]               = useState(() => loadLS('bloom_users', INIT_USERS));
-  const [appointments, setAppointments] = useState(() => loadLS('bloom_appts', buildAppointments));
+  const [users, setUsers]               = useState([]);
+  const [appointments, setAppointments] = useState([]);
+  const [loading, setLoading]           = useState(true);
   const [currentUser, setCurrentUser]   = useState(null);
   const [clientSec, setClientSec]       = useState('dashboard');
   const [adminSec, setAdminSec]         = useState('dashboard');
   const [toast, setToast]               = useState(null);
 
-  useEffect(() => { localStorage.setItem('bloom_users', JSON.stringify(users)); }, [users]);
-  useEffect(() => { localStorage.setItem('bloom_appts', JSON.stringify(appointments)); }, [appointments]);
+  // Normalize DB row keys (snake_case → camelCase)
+  function normAppt(r) {
+    return {
+      id: r.id, clientId: r.client_id, clientName: r.client_name,
+      clientEmail: r.client_email, clientPhone: r.client_phone,
+      serviceId: r.service_id, serviceName: r.service_name,
+      serviceDuration: r.service_duration, date: r.date, time: r.time,
+      status: r.status, notes: r.notes, adminRead: r.admin_read,
+      createdAt: r.created_at,
+    };
+  }
+
+  // Load all data from Supabase on mount
+  useEffect(() => {
+    async function load() {
+      const [{ data: u }, { data: a }] = await Promise.all([
+        supabase.from('bloom_users').select('*'),
+        supabase.from('bloom_appointments').select('*').order('date').order('time'),
+      ]);
+      if (u) setUsers(u);
+      if (a) setAppointments(a.map(normAppt));
+      setLoading(false);
+    }
+    load();
+  }, []);
 
   function showToast(message, type = 'success') {
     setToast({ message, type });
@@ -216,9 +239,11 @@ export default function App() {
     return false;
   }
 
-  function register(name, email, phone, password) {
+  async function register(name, email, phone, password) {
     if (users.find(u => u.email === email)) return false;
     const u = { id:`u${Date.now()}`, name, email, phone, password, role:'client' };
+    const { error } = await supabase.from('bloom_users').insert(u);
+    if (error) return false;
     setUsers(p => [...p, u]);
     setCurrentUser(u);
     return true;
@@ -230,26 +255,46 @@ export default function App() {
     setAdminSec('dashboard');
   }
 
-  function bookAppointment(data) {
-    const a = { id:`a${Date.now()}`, clientId:currentUser.id, clientName:currentUser.name, clientEmail:currentUser.email, clientPhone:currentUser.phone, ...data, status:'pending', createdAt:new Date().toISOString(), adminRead:false };
-    setAppointments(p => [...p, a]);
-    showToast('¡Cita agendada! Pendiente de confirmación del spa.');
+  async function bookAppointment(data) {
+    const a = {
+      id: `a${Date.now()}`,
+      client_id: currentUser.id, client_name: currentUser.name,
+      client_email: currentUser.email, client_phone: currentUser.phone,
+      service_id: data.serviceId, service_name: data.serviceName,
+      service_duration: data.serviceDuration, date: data.date, time: data.time,
+      status: 'pending', notes: data.notes, admin_read: false,
+    };
+    const { error } = await supabase.from('bloom_appointments').insert(a);
+    if (!error) {
+      setAppointments(p => [...p, normAppt(a)]);
+      showToast('¡Cita agendada! Pendiente de confirmación del spa.');
+    }
   }
 
-  function cancelAppointment(id) {
+  async function cancelAppointment(id) {
+    await supabase.from('bloom_appointments').update({ status:'cancelled' }).eq('id', id);
     setAppointments(p => p.map(a => a.id===id ? {...a,status:'cancelled'} : a));
     showToast('Cita cancelada.');
   }
 
-  function confirmAppointment(id) {
+  async function confirmAppointment(id) {
+    await supabase.from('bloom_appointments').update({ status:'confirmed', admin_read:true }).eq('id', id);
     setAppointments(p => p.map(a => a.id===id ? {...a,status:'confirmed',adminRead:true} : a));
     showToast('Cita confirmada.');
   }
 
-  function rejectAppointment(id) {
+  async function rejectAppointment(id) {
+    await supabase.from('bloom_appointments').update({ status:'rejected', admin_read:true }).eq('id', id);
     setAppointments(p => p.map(a => a.id===id ? {...a,status:'rejected',adminRead:true} : a));
     showToast('Cita rechazada.', 'error');
   }
+
+  if (loading) return (
+    <div style={{ minHeight:'100vh', background:'#FAF7F2', display:'flex', alignItems:'center', justifyContent:'center', flexDirection:'column', gap:16 }}>
+      <div style={{ color:'#C9A96E', fontSize:40 }}>✦</div>
+      <p style={{ fontFamily:"'DM Sans',sans-serif", color:'#8C7B6B', fontSize:15 }}>Cargando Estudio Bloom…</p>
+    </div>
+  );
 
   const ctx = {
     users, appointments, currentUser,
@@ -292,10 +337,11 @@ function LandingPage() {
     if (!login(form.email, form.password)) setError('Credenciales incorrectas.');
   }
 
-  function handleRegister() {
+  async function handleRegister() {
     if (!form.name||!form.email||!form.phone||!form.password) { setError('Completa todos los campos.'); return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) { setError('Email inválido.'); return; }
-    if (!register(form.name, form.email, form.phone, form.password)) setError('Este email ya está registrado.');
+    const ok = await register(form.name, form.email, form.phone, form.password);
+    if (!ok) setError('Este email ya está registrado.');
   }
 
   function switchTab(t) { setTab(t); setError(''); setForm({name:'',email:'',phone:'',password:''}); }
